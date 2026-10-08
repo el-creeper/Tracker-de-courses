@@ -290,17 +290,19 @@ class MainWindow:
 
 
     def refresh_list(self):
-        """Rafraîchit la liste des courses"""
+        """Rafraîchit la liste des courses et met à jour le budget"""
         # Effacer la liste actuelle
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        # Récupérer les dernières entrées (limité à 50 pour performance)
+        # Récupérer les dernières entrées
         items = self.db.get_all_items()
         
         for row in items:
             # row contient : id, article, categorie, prix, magasin, date
             self.tree.insert("", "end", values=(row[1], row[2], f"{row[3]:.2f}", row[4], row[5]))
+
+        self.update_budget_display()
 
     def run(self):
         self.root.mainloop()
