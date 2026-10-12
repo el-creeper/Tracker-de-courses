@@ -4,14 +4,10 @@ import sys
 import shutil
 
 def get_db_path():
-    # Déterminer le dossier où se trouve l'exécutable ou le script
     if getattr(sys, 'frozen', False):
-        # Dossier de l'exécutable final
         application_path = os.path.dirname(sys.executable)
-        # Utiliser getattr pour éviter l'erreur Pylance sur sys._MEIPASS
         bundle_path = getattr(sys, '_MEIPASS', application_path)
     else:
-        # Mode développement
         application_path = os.path.dirname(os.path.abspath(__file__))
         bundle_path = application_path
     
@@ -19,17 +15,14 @@ def get_db_path():
     data_path = os.path.join(application_path, DATA_DIR)
     db_file = os.path.join(data_path, "courses_data.db")
     
-    # Créer le dossier data à côté de l'exécutable s'il n'existe pas
     os.makedirs(data_path, exist_ok=True)
     
-    # Si la base de données n'existe pas encore à côté de l'exe, 
-    # mais qu'elle a été embarquée par PyInstaller, on la copie.
     bundled_db = os.path.join(bundle_path, DATA_DIR, "courses_data.db")
     if not os.path.exists(db_file) and os.path.exists(bundled_db) and db_file != bundled_db:
         try:
             shutil.copy2(bundled_db, db_file)
         except Exception as e:
-            print(f"Erreur lors de la copie de la BDD initiale : {e}")
+            print(f"Erreur lors de la copie de la BDD : {e}")
 
     return db_file
 
@@ -41,7 +34,6 @@ class DatabaseManager:
         self._create_tables()
 
     def _create_tables(self):
-        """Crée les tables et met à jour le schéma si nécessaire"""
         try:
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS items (
@@ -50,17 +42,15 @@ class DatabaseManager:
                     categorie TEXT,
                     prix REAL,
                     magasin TEXT,
-                    date_achat TEXT DEFAULT CURRENT_TIMESTAMP,
-                    quantite REAL DEFAULT 1.0
+                    date_achat TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # Si la table existait AVANT que tu ajoutes "quantite", ça va planter.
-            # On tente d'ajouter la colonne. Si elle existe déjà, ça lève une erreur qu'on ignore.
-            try:
+            # Vérification propre de l'existence de la colonne quantite
+            self.cursor.execute("PRAGMA table_info(items)")
+            columns = [col[1] for col in self.cursor.fetchall()]
+            if 'quantite' not in columns:
                 self.cursor.execute("ALTER TABLE items ADD COLUMN quantite REAL DEFAULT 1.0")
-            except sqlite3.OperationalError:
-                pass # La colonne existe déjà, tout va bien.
             
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS price_history (
@@ -80,15 +70,21 @@ class DatabaseManager:
                 INSERT INTO items (article, categorie, prix, magasin, quantite) 
                 VALUES (?, ?, ?, ?, ?)
             ''', (article, categorie, prix, magasin, quantite))
-
             self.cursor.execute('''
                 INSERT INTO price_history (article, prix) VALUES (?, ?)
             ''', (article, prix))
-
             self.conn.commit()
             return True
         except Exception as e:
-            print(f"Erreur ajout : {e}")
+            self.conn.rollback()
+            return False
+
+    def update_quantity(self, item_id, new_quantity):
+        try:
+            self.cursor.execute("UPDATE items SET quantite = ? WHERE id = ?", (new_quantity, item_id))
+            self.conn.commit()
+            return True
+        except Exception as e:
             self.conn.rollback()
             return False
         
@@ -99,13 +95,12 @@ class DatabaseManager:
             self.conn.commit()
             return True
         except Exception as e:
-            print(f"Erreur renomination : {e}")
             self.conn.rollback()
             return False
 
     def get_summary_by_category(self):
         self.cursor.execute('''
-            SELECT categorie, SUM(prix), SUM(quantite) 
+            SELECT categorie, SUM(prix * quantite), SUM(quantite) 
             FROM items GROUP BY categorie
         ''')
         return self.cursor.fetchall()
@@ -119,19 +114,17 @@ class DatabaseManager:
 
     def get_total_budget(self):
         try:
-            self.cursor.execute("SELECT SUM(prix) FROM items")
+            self.cursor.execute("SELECT SUM(prix * quantite) FROM items")
             result = self.cursor.fetchone()[0]
             return 0.0 if result is None else float(result)
-        except Exception as e:
-            print(f"Erreur budget : {e}")
+        except Exception:
             return 0.0
 
     def get_all_items(self):
         try:
-            self.cursor.execute("SELECT * FROM items ORDER BY id DESC")
+            self.cursor.execute("SELECT * FROM items ORDER BY date_achat DESC, id DESC")
             return self.cursor.fetchall()
-        except Exception as e:
-            print(f"Erreur lecture items : {e}")
+        except Exception:
             return []
 
     def get_price_history(self, article_name):
@@ -141,15 +134,44 @@ class DatabaseManager:
                 WHERE article = ? ORDER BY date_achat ASC
             ''', (article_name,))
             return self.cursor.fetchall()
+        except Exception:
+            return []
+
+    def get_categories(self):
+        try:
+            self.cursor.execute("SELECT DISTINCT categorie FROM items WHERE categorie IS NOT NULL AND categorie != '' ORDER BY categorie")
+            return [row[0] for row in self.cursor.fetchall()]
+        except Exception:
+            return []
+
+    def get_advanced_stats(self, period="Mois", category="Toutes"):
+        format_map = {
+            "Jour": "%Y-%m-%d",
+            "Semaine": "%Y-S%W",
+            "Mois": "%Y-%m"
+        }
+        date_format = format_map.get(period, "%Y-%m")
+        
+        query = f"SELECT strftime('{date_format}', date_achat) as period, SUM(prix * quantite) FROM items"
+        params = []
+        
+        if category and category != "Toutes":
+            query += " WHERE categorie = ?"
+            params.append(category)
+            
+        query += " GROUP BY period ORDER BY period ASC"
+        
+        try:
+            self.cursor.execute(query, params)
+            return self.cursor.fetchall()
         except Exception as e:
-            print(f"Erreur historique : {e}")
+            print(f"Erreur stats : {e}")
             return []
 
     def delete_item(self, item_id):
         try:
             self.cursor.execute("SELECT article FROM items WHERE id = ?", (item_id,))
             result = self.cursor.fetchone()
-            
             if result:
                 article_name = result[0]
                 self.cursor.execute("DELETE FROM items WHERE id = ?", (item_id,))
@@ -157,8 +179,7 @@ class DatabaseManager:
                 self.conn.commit()
                 return True
             return False
-        except Exception as e:
-            print(f"Erreur suppression : {e}")
+        except Exception:
             self.conn.rollback()
             return False
 
