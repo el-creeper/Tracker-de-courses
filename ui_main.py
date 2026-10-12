@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import DatabaseManager
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -253,22 +253,64 @@ class MainWindow:
             category = cat_var.get()
             data = self.db.get_advanced_stats(period, category)
             
-            # Nettoyage des données pour protéger Matplotlib des crashs sur les lignes vides/erronées
-            cleaned_periods = []
-            cleaned_totals = []
-            
-            for row in data:
-                p, t = row[0], row[1]
-                if p is None: p = "Date Inconnue" # Sécurise les vieilles dates mal formatées
-                if t is None: t = 0.0
-                cleaned_periods.append(str(p))
-                cleaned_totals.append(float(t))
-            
-            if not cleaned_periods or sum(cleaned_totals) == 0:
-                ttk.Label(graph_frame, text="Aucune dépense valide pour ces critères.", font=("Segoe UI", 12)).pack(pady=50)
+            if not data:
+                ttk.Label(graph_frame, text="Aucune dépense enregistrée pour ces critères.", font=("Segoe UI", 12)).pack(pady=50)
                 return
             
-            # Figure autonome (évite les fuites de mémoire)
+            # 1. Convertir les données SQL en un dictionnaire { 'Date': Total }
+            data_dict = {str(row[0]): float(row[1] or 0.0) for row in data if row[0]}
+            
+            if not data_dict:
+                return
+
+            # 2. Déterminer la date de début et de fin
+            periods_list = sorted(data_dict.keys())
+            start_period = periods_list[0]
+            end_period = periods_list[-1]
+            
+            cleaned_periods = []
+            cleaned_totals = []
+
+            # 3. Remplir les trous selon la période choisie
+            if period == "Jour":
+                start_date = datetime.strptime(start_period, "%Y-%m-%d")
+                end_date = datetime.strptime(end_period, "%Y-%m-%d")
+                current = start_date
+                while current <= end_date:
+                    p_str = current.strftime("%Y-%m-%d")
+                    cleaned_periods.append(p_str)
+                    cleaned_totals.append(data_dict.get(p_str, 0.0))
+                    current += timedelta(days=1)
+                    
+            elif period == "Mois":
+                start_y, start_m = map(int, start_period.split('-'))
+                end_y, end_m = map(int, end_period.split('-'))
+                curr_y, curr_m = start_y, start_m
+                while (curr_y < end_y) or (curr_y == end_y and curr_m <= end_m):
+                    p_str = f"{curr_y}-{curr_m:02d}"
+                    cleaned_periods.append(p_str)
+                    cleaned_totals.append(data_dict.get(p_str, 0.0))
+                    curr_m += 1
+                    if curr_m > 12:
+                        curr_m = 1
+                        curr_y += 1
+                        
+            elif period == "Semaine":
+                # Convertir "2024-S41" en une vraie date (le lundi de cette semaine-là)
+                start_y, start_w = int(start_period[:4]), int(start_period[-2:])
+                end_y, end_w = int(end_period[:4]), int(end_period[-2:])
+                
+                start_date = datetime.strptime(f"{start_y}-W{start_w:02d}-1", "%Y-W%W-%w")
+                end_date = datetime.strptime(f"{end_y}-W{end_w:02d}-1", "%Y-W%W-%w")
+                
+                current = start_date
+                while current <= end_date:
+                    p_str = current.strftime("%Y-S%W")
+                    cleaned_periods.append(p_str)
+                    cleaned_totals.append(data_dict.get(p_str, 0.0))
+                    current += timedelta(days=7)
+
+            # 4. Dessiner le graphique avec les données continues
             fig = Figure(figsize=(7, 4), dpi=100)
             ax = fig.add_subplot(111)
             ax.bar(cleaned_periods, cleaned_totals, color='#27AE60', edgecolor='black', alpha=0.8)
