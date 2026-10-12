@@ -1,311 +1,271 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import sys
 import os
-
-# Import absolu pour PyInstaller
+from datetime import datetime
 from database import DatabaseManager
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 class MainWindow:
     def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("🛒 Suivi de Courses")
+        self.root.geometry("850x650")
+        
+        # Appliquer un thème plus moderne
+        style = ttk.Style()
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+            
+        style.configure("Treeview", rowheight=25, font=('Segoe UI', 10))
+        style.configure("Treeview.Heading", font=('Segoe UI', 10, 'bold'))
+
         try:
-            self.root = tk.Tk()
-            self.root.title("Suivi de Courses")
-            self.root.geometry("800x600")
-            
-            # Initialisation de la BDD
             self.db = DatabaseManager()
-            
-            # Vérifier si la DB est accessible (pas besoin de cursor ici)
-            db_path = getattr(self.db, "db_path", None)
-            get_db_path = getattr(self.db, "get_db_path", None)
-            if db_path is None and callable(get_db_path):
-                db_path = get_db_path()
-
-            if db_path is not None:
-                if isinstance(db_path, (str, os.PathLike)):
-                    db_path_str = os.fspath(db_path)
-                else:
-                    db_path_str = None
-
-                if db_path_str and not os.path.exists(db_path_str):
-                    messagebox.showwarning("Info", "La base de données sera créée au premier lancement.")
-
-           
-            
             self.setup_ui()
         except Exception as e:
-            print(f"Erreur d'initialisation : {e}")
-            messagebox.showerror("Erreur", f"L'application ne peut pas démarrer.\nDétails : {str(e)}")
+            messagebox.showerror("Erreur Fatale", f"Impossible d'initialiser la base de données.\n{str(e)}")
+            self.root.destroy()
 
     def setup_ui(self):
         # --- Cadre d'entrée de données ---
-        input_frame = ttk.LabelFrame(self.root, text="Ajouter une course", padding=10)
-        input_frame.pack(fill="x", padx=10, pady=5)
+        input_frame = ttk.LabelFrame(self.root, text="➕ Ajouter un article", padding=15)
+        input_frame.pack(fill="x", padx=15, pady=10)
 
-        ttk.Label(input_frame, text="Article :").grid(row=0, column=0, sticky="w")
-        self.entry_article = ttk.Entry(input_frame, width=20)
-        self.entry_article.grid(row=0, column=1, padx=5)
+        # Ligne 1
+        ttk.Label(input_frame, text="Article :").grid(row=0, column=0, sticky="w", pady=5)
+        self.entry_article = ttk.Entry(input_frame, width=25)
+        self.entry_article.grid(row=0, column=1, padx=10, pady=5)
 
-        ttk.Label(input_frame, text="Catégorie :").grid(row=0, column=2, sticky="w")
-        self.entry_cat = ttk.Entry(input_frame, width=15)
-        self.entry_cat.grid(row=0, column=3, padx=5)
+        ttk.Label(input_frame, text="Catégorie :").grid(row=0, column=2, sticky="w", pady=5)
+        self.entry_cat = ttk.Entry(input_frame, width=20)
+        self.entry_cat.grid(row=0, column=3, padx=10, pady=5)
 
-        ttk.Label(input_frame, text="Prix (€) :").grid(row=0, column=4, sticky="w")
+        ttk.Label(input_frame, text="Prix (€) :").grid(row=0, column=4, sticky="w", pady=5)
         self.entry_prix = ttk.Entry(input_frame, width=10)
-        self.entry_prix.grid(row=0, column=5, padx=5)
+        self.entry_prix.grid(row=0, column=5, padx=10, pady=5)
 
-        ttk.Label(input_frame, text="Magasin :").grid(row=0, column=6, sticky="w")
+        # Ligne 2
+        ttk.Label(input_frame, text="Quantité :").grid(row=1, column=0, sticky="w", pady=5)
+        self.entry_quantite = ttk.Entry(input_frame, width=10)
+        self.entry_quantite.insert(0, "1")
+        self.entry_quantite.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+
+        ttk.Label(input_frame, text="Magasin :").grid(row=1, column=2, sticky="w", pady=5)
         self.entry_mag = ttk.Entry(input_frame, width=20)
-        self.entry_mag.grid(row=0, column=7, padx=5)
+        self.entry_mag.grid(row=1, column=3, padx=10, pady=5)
 
-        btn_add = ttk.Button(input_frame, text="Ajouter", command=self.add_course)
-        btn_add.grid(row=0, column=8, padx=10)
+        btn_add = ttk.Button(input_frame, text="✔️ Ajouter", command=self.add_course)
+        btn_add.grid(row=1, column=4, columnspan=2, padx=10, pady=5, sticky="we")
 
         # --- Cadre d'affichage du Budget ---
-        stats_frame = ttk.LabelFrame(self.root, text="Budget & Statistiques", padding=10)
-        stats_frame.pack(fill="x", padx=10, pady=5)
+        stats_frame = ttk.Frame(self.root, padding=5)
+        stats_frame.pack(fill="x", padx=15)
 
-        self.lbl_budget_total = ttk.Label(stats_frame, text="Total : 0.00 €", font=("Arial", 12, "bold"))
-        self.lbl_budget_total.grid(row=0, column=0, sticky="w")
+        self.lbl_budget_total = ttk.Label(stats_frame, text="Total : 0.00 €", font=("Segoe UI", 14, "bold"), foreground="#2C3E50")
+        self.lbl_budget_total.pack(side="left")
 
         # --- Cadre de la liste des courses ---
-        list_frame = ttk.LabelFrame(self.root, text="Dernières Courses", padding=10)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        list_frame = ttk.LabelFrame(self.root, text="📋 Historique", padding=10)
+        list_frame.pack(fill="both", expand=True, padx=15, pady=5)
 
-        columns = ("Article", "Catégorie", "Prix", "Magasin", "Date")
-        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=8)
+        columns = ("Article", "Catégorie", "Prix", "Qté", "Magasin", "Date")
+        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings")
         
+        widths = {"Article": 150, "Catégorie": 100, "Prix": 80, "Qté": 60, "Magasin": 120, "Date": 150}
         for col in columns:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=100)
+            self.tree.column(col, width=widths[col], anchor="center")
 
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
         
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+        self.tree.bind("<Double-1>", self.on_item_double_click)
 
-        # --- Bouton Supprimer (Ajouté ici) ---
-        btn_delete = ttk.Button(list_frame, text="Supprimer Sélectionnée", command=self.delete_selected)
-        btn_delete.pack(pady=5)
+        # --- Barre de Boutons en bas ---
+        btn_frame = ttk.Frame(self.root, padding=10)
+        btn_frame.pack(fill="x", pady=5)
+
+        ttk.Button(btn_frame, text="❌ Supprimer", command=self.delete_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="✏️ Modif. Catégorie", command=self.edit_category).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="🔄 Renommer Global", command=self.rename_global).pack(side=tk.LEFT, padx=5)
         
-        btn_refresh = ttk.Button(list_frame, text="🔄 Rafraîchir la page", command=self.refresh_list)
-        btn_refresh.pack(pady=5)
-        
-        btn_edit_cat = ttk.Button(list_frame, text="✏️ Modifier Catégorie", command=self.edit_category)
-        btn_edit_cat.pack(pady=5)
-        
+        ttk.Button(btn_frame, text="📊 Bilan Catégorie", command=self.show_bilan_cat).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="📦 Bilan Article", command=self.show_bilan_art).pack(side=tk.RIGHT, padx=5)
+
         self.refresh_list()
 
     def add_course(self):
-        article = self.entry_article.get()
-        cat = self.entry_cat.get()
-        try:
-            prix = float(self.entry_prix.get())
-        except ValueError:
-            messagebox.showerror("Erreur", "Le prix doit être un nombre.")
-            return
+        article = self.entry_article.get().strip()
+        cat = self.entry_cat.get().strip()
+        magasin = self.entry_mag.get().strip()
         
-        magasin = self.entry_mag.get()
+        try:
+            prix = float(self.entry_prix.get().replace(',', '.'))
+            quantite = float(self.entry_quantite.get().replace(',', '.'))
+        except ValueError:
+            messagebox.showerror("Erreur", "Le prix et la quantité doivent être des nombres valides.")
+            return
 
         if not article or prix <= 0:
-            messagebox.showwarning("Attention", "Article et Prix requis.")
+            messagebox.showwarning("Attention", "Le nom de l'article et un prix positif sont requis.")
             return
 
-        # Ajout à la base de données
-        if self.db.add_item(article, cat, prix, magasin):
-            self.update_budget_display()
-            self.refresh_list()  # ⚠️ IMPORTANT : Rafraîchir la liste
-            
-            # Reset champs
+        if self.db.add_item(article, cat, prix, magasin, quantite):
+            self.refresh_list()
             self.entry_article.delete(0, tk.END)
             self.entry_cat.delete(0, tk.END)
             self.entry_prix.delete(0, tk.END)
             self.entry_mag.delete(0, tk.END)
-            
-            messagebox.showinfo("Succès", "Article ajouté !")
+            self.entry_quantite.delete(0, tk.END)
+            self.entry_quantite.insert(0, "1")
         else:
             messagebox.showerror("Erreur", "Impossible d'ajouter l'article.")
 
     def delete_selected(self):
-        """Supprime l'article sélectionné dans la liste"""
         selection = self.tree.selection()
-        
         if not selection:
-            messagebox.showwarning("Aucun choix", "Sélectionnez un article à supprimer.")
+            messagebox.showwarning("Aucun choix", "Sélectionnez un article à supprimer dans la liste.")
             return
         
-        # ✅ CORRECTION 2 : Récupérer les données de la ligne sélectionnée correctement
-        selected_item_values = self.tree.item(selection[0])["values"]
+        # Grâce au paramètre iid=row[0], on récupère directement l'ID de la BDD !
+        item_id = int(selection[0])
         
-        if len(selected_item_values) < 5:
-            messagebox.showerror("Erreur", "Données invalides pour suppression.")
-            return
-        
-        # Les valeurs sont : (Article, Catégorie, Prix, Magasin, Date)
-        article_name = selected_item_values[0]
-        
-        # Trouver l'ID de cet article dans la base de données
-        items = self.db.get_all_items()
-        item_id_to_delete = None
-        
-        for row in items:
-            # row contient : id, article, categorie, prix, magasin, date
-            if row[1] == article_name:  # On compare par l'article (colonne 1)
-                item_id_to_delete = row[0]  # L'ID est la première colonne
-                break
-        
-        if not item_id_to_delete:
-            messagebox.showerror("Erreur", "Impossible de trouver l'article à supprimer.")
-            return
-
-        try:
-            # Supprimer depuis la table items
-            self.db.cursor.execute("DELETE FROM items WHERE id = ?", (item_id_to_delete,))
-            
-            # Supprimer aussi depuis price_history pour garder la cohérence
-            self.db.cursor.execute("DELETE FROM price_history WHERE article = ?", (article_name,))
-            
-            self.db.conn.commit()
-            
-            messagebox.showinfo("Succès", "Article supprimé !")
-            
-            # Rafraîchir l'affichage et le budget
-            self.update_budget_display()
-            self.refresh_list()
-        except Exception as e:
-            print(f"Erreur suppression : {e}")
-            self.db.conn.rollback()
-            messagebox.showerror("Erreur", f"Impossible de supprimer l'article.\nDétails : {str(e)}")
+        if messagebox.askyesno("Confirmation", "Êtes-vous sûr de vouloir supprimer cet article ?"):
+            if self.db.delete_item(item_id):
+                self.refresh_list()
+            else:
+                messagebox.showerror("Erreur", "Échec de la suppression.")
 
     def update_budget_display(self):
         total = self.db.get_total_budget()
-        
-        # On récupère le compteur via la DB, pas via self.cursor qui n'existe pas ici
-        count = 0
-        try:
-            items = self.db.get_all_items()
-            count = len(items)
-        except Exception as e:
-            print(f"Erreur comptage : {e}")
-        
-        self.lbl_budget_total.config(text=f"Total : {total:.2f} € ({count} articles)")
+        items = self.db.get_all_items()
+        count = len(items)
+        self.lbl_budget_total.config(text=f"Total : {total:.2f} €  ({count} articles enregistrés)")
         
     def edit_category(self):
-        """Modifie les catégories des articles sélectionnés"""
         selection = self.tree.selection()
-        
         if not selection:
-            messagebox.showwarning("Aucun choix", "Sélectionnez un ou plusieurs articles à modifier.")
+            messagebox.showwarning("Aucun choix", "Sélectionnez un article pour modifier sa catégorie.")
             return
         
-        # Récupérer les noms des articles sélectionnés
-        items_to_edit = []
-        for item in selection:
-            values = self.tree.item(item)["values"]
-            if len(values) >= 2:
-                items_to_edit.append(values[0]) # On ne garde que le nom de l'article
+        item_id = int(selection[0])
+        item_data = self.tree.item(selection[0])["values"]
+        article_name = item_data[0]
+        current_cat = item_data[1]
         
-        # Créer une fenêtre de dialogue
-        edit_window = tk.Toplevel(self.root)
-        edit_window.title("Modifier les Catégories")
-        edit_window.geometry("450x350")
+        new_cat = simpledialog.askstring("Catégorie", f"Nouvelle catégorie pour '{article_name}' :", initialvalue=current_cat)
         
-        # Frame pour la liste
-        list_frame_edit = ttk.LabelFrame(edit_window, text="Articles sélectionnés", padding=10)
-        list_frame_edit.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        
-        # Treeview pour afficher les articles à modifier
-        columns_edit = ("Article", "Catégorie Actuelle")
-        tree_edit = ttk.Treeview(list_frame_edit, columns=columns_edit, show="headings", height=6)
-        
-        for col in columns_edit:
-            tree_edit.heading(col, text=col)
-            tree_edit.column(col, width=200)
-        
-        tree_edit.pack(side="left", fill="both", expand=True)
-        
-        scrollbar_edit = ttk.Scrollbar(list_frame_edit, orient="vertical", command=tree_edit.yview)
-        tree_edit.configure(yscrollcommand=scrollbar_edit.set)
-        scrollbar_edit.pack(side="right", fill="y")
-        
-        # Remplir la liste
-        for name in items_to_edit:
-            # On cherche la catégorie actuelle dans la DB pour l'afficher
-            self.db.cursor.execute("SELECT categorie FROM items WHERE article = ?", (name,))
-            res = self.db.cursor.fetchone()
-            current_cat = res[0] if res else "Inconnue"
-            tree_edit.insert("", "end", values=(name, current_cat))
-
-        # Frame pour la saisie
-        frame_input = ttk.Frame(edit_window, padding=10)
-        frame_input.pack(fill="x")
-
-        ttk.Label(frame_input, text="Nouvelle Catégorie :").grid(row=0, column=0, sticky="w")
-        entry_new_cat = ttk.Entry(frame_input, width=30)
-        entry_new_cat.grid(row=0, column=1, padx=5, pady=5)
-        
-        # Bouton pour valider la modification de la ligne sélectionnée
-        def update_selected_item():
-            selected_row = tree_edit.selection()
-            if not selected_row:
-                messagebox.showwarning("Attention", "Sélectionnez une ligne dans la liste.")
-                return
-            
-            article_name = tree_edit.item(selected_row[0])["values"][0]
-            new_cat = entry_new_cat.get().strip()
-            
-            if not new_cat:
-                messagebox.showwarning("Attention", "La catégorie ne peut pas être vide.")
-                return
-            
+        if new_cat is not None and new_cat.strip() != "":
             try:
-                # Mise à jour dans la BDD
-                self.db.cursor.execute('''
-                    UPDATE items SET categorie = ? WHERE article = ?
-                ''', (new_cat, article_name))
-                
-                # Mise à jour de l'historique (optionnel, mais propre)
-                self.db.cursor.execute('''
-                    UPDATE price_history SET article = ? WHERE article = ?
-                ''', (article_name, new_cat))
-                
+                self.db.cursor.execute("UPDATE items SET categorie = ? WHERE id = ?", (new_cat.strip(), item_id))
                 self.db.conn.commit()
-                
-                # Mise à jour visuelle
-                tree_edit.item(selected_row[0], values=(article_name, new_cat))
-                entry_new_cat.delete(0, tk.END)
-                messagebox.showinfo("Succès", f"Catégorie mise à jour pour : {article_name}")
                 self.refresh_list()
             except Exception as e:
                 self.db.conn.rollback()
-                messagebox.showerror("Erreur", f"Échec : {str(e)}")
-
-        btn_save = ttk.Button(frame_input, text="Enregistrer la sélection", command=update_selected_item)
-        btn_save.grid(row=0, column=2, padx=5)
-
-        btn_cancel = ttk.Button(edit_window, text="Annuler", command=edit_window.destroy)
-        btn_cancel.pack(pady=5)
-
+                messagebox.showerror("Erreur", f"Échec de la mise à jour : {e}")
 
     def refresh_list(self):
-        """Rafraîchit la liste des courses et met à jour le budget"""
-        # Effacer la liste actuelle
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        # Récupérer les dernières entrées
         items = self.db.get_all_items()
-        
         for row in items:
-            # row contient : id, article, categorie, prix, magasin, date
-            self.tree.insert("", "end", values=(row[1], row[2], f"{row[3]:.2f}", row[4], row[5]))
+            # row = (id, article, categorie, prix, magasin, date, quantite)
+            # Utiliser row[0] (l'ID en base) comme IID dans l'arbre pour faciliter les manips
+            self.tree.insert("", "end", iid=str(row[0]), 
+                             values=(row[1], row[2], f"{row[3]:.2f} €", row[6], row[4], row[5]))
 
         self.update_budget_display()
 
     def run(self):
         self.root.mainloop()
+        
+    def on_item_double_click(self, event):
+        selection = self.tree.selection()
+        if not selection:
+            return
+
+        item_data = self.tree.item(selection[0])["values"]
+        article_name = item_data[0]
+        history = self.db.get_price_history(article_name)
+
+        if not history or len(history) < 2:
+            messagebox.showinfo("Info", f"Pas assez d'historique de prix pour tracer un graphique pour : {article_name}")
+            return
+
+        hist_window = tk.Toplevel(self.root)
+        hist_window.title(f"📈 Évolution : {article_name}")
+        hist_window.geometry("600x500")
+
+        prices = []
+        dates = []
+        for p, d in history:
+            prices.append(p)
+            try:
+                dates.append(datetime.strptime(d, "%Y-%m-%d %H:%M:%S"))
+            except ValueError:
+                dates.append(d) # Fallback si le format date varie
+
+        fig, ax = plt.subplots(figsize=(5, 4), dpi=100)
+        ax.plot(dates, prices, marker='o', linestyle='-', color='#2980B9', linewidth=2)
+        
+        ax.set_title(f"Évolution du prix : {article_name}")
+        ax.set_ylabel("Prix (€)")
+        ax.grid(True, linestyle='--', alpha=0.7)
+        fig.autofmt_xdate(rotation=45)
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=hist_window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Gestion propre de la mémoire de matplotlib à la fermeture
+        def on_close():
+            plt.close(fig)
+            hist_window.destroy()
+
+        hist_window.protocol("WM_DELETE_WINDOW", on_close)
+        ttk.Button(hist_window, text="Fermer", command=on_close).pack(pady=10)
+        
+    def rename_global(self):
+        old_name = self.entry_article.get().strip()
+        if not old_name:
+            messagebox.showwarning("Attention", "Tapez d'abord le nom de l'article actuel dans le champ de saisie 'Article' en haut.")
+            return
+        
+        new_name = simpledialog.askstring("Renommer globalement", f"Remplacer TOUTES les occurrences de '{old_name}' par :")
+        if new_name and new_name.strip():
+            if self.db.rename_article_global(old_name, new_name.strip()):
+                messagebox.showinfo("Succès", f"L'article a été renommé en '{new_name}'")
+                self.refresh_list()
+                self.entry_article.delete(0, tk.END)
+
+    def show_bilan_cat(self):
+        data = self.db.get_summary_by_category()
+        self.show_stats_window("Bilan par Catégorie", data, ["Catégorie", "Total Prix (€)", "Total Qté"])
+
+    def show_bilan_art(self):
+        data = self.db.get_summary_by_article()
+        self.show_stats_window("Bilan par Article", data, ["Article", "Total Qté"])
+
+    def show_stats_window(self, title, data, headers):
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.geometry("450x350")
+        
+        tree = ttk.Treeview(win, columns=headers, show="headings")
+        for h in headers:
+            tree.heading(h, text=h)
+            tree.column(h, anchor="center")
+        tree.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        
+        for row in data:
+            formatted_row = [f"{v:.2f}" if isinstance(v, float) else v for v in row]
+            tree.insert("", "end", values=formatted_row)
 
 if __name__ == "__main__":
     app = MainWindow()

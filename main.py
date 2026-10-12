@@ -1,18 +1,16 @@
 import sys
 import os
 
-# ✅ AJOUTE CES 4 LIGNES AU TOUT DÉBUT DU FICHIER
+# Définir le bon chemin de travail
 if getattr(sys, 'frozen', False):
-    # Si on est dans un .exe
-    os.path.dirname(sys.executable)
+    # Si on est dans un .exe, on utilise getattr pour éviter l'erreur Pylance
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 else:
     # Si on est en mode normal
-    os.getcwd()
+    base_path = os.path.dirname(os.path.abspath(__file__))
 
-# Ajoute le dossier actuel au chemin de recherche de Python
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(base_path)
 
-# Maintenant, on peut importer ui_main sans erreur
 from ui_main import MainWindow
 
 if __name__ == "__main__":

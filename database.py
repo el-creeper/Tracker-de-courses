@@ -1,49 +1,47 @@
 import sqlite3
 import os
 import sys
+import shutil
 
-# Fonction pour trouver le bon chemin de l'exécutable
 def get_db_path():
+    # Déterminer le dossier où se trouve l'exécutable ou le script
     if getattr(sys, 'frozen', False):
-        # On est dans un .exe -> on cherche par rapport au fichier exe
+        # Dossier de l'exécutable final
         application_path = os.path.dirname(sys.executable)
+        # Utiliser getattr pour éviter l'erreur Pylance sur sys._MEIPASS
+        bundle_path = getattr(sys, '_MEIPASS', application_path)
     else:
-        # Développement local -> dossier actuel
-        application_path = os.getcwd()
+        # Mode développement
+        application_path = os.path.dirname(os.path.abspath(__file__))
+        bundle_path = application_path
     
     DATA_DIR = "data"
-    DB_FILE = f"{os.path.join(application_path, DATA_DIR)}/courses_data.db"
+    data_path = os.path.join(application_path, DATA_DIR)
+    db_file = os.path.join(data_path, "courses_data.db")
     
-    # Créer le dossier data si n'existe pas
-    if not os.path.exists(os.path.join(application_path, DATA_DIR)):
+    # Créer le dossier data à côté de l'exécutable s'il n'existe pas
+    os.makedirs(data_path, exist_ok=True)
+    
+    # Si la base de données n'existe pas encore à côté de l'exe, 
+    # mais qu'elle a été embarquée par PyInstaller, on la copie.
+    bundled_db = os.path.join(bundle_path, DATA_DIR, "courses_data.db")
+    if not os.path.exists(db_file) and os.path.exists(bundled_db) and db_file != bundled_db:
         try:
-            os.makedirs(os.path.join(application_path, DATA_DIR))
-        except PermissionError as e:
-            print(f"Erreur création dossier : {e}")
-    
-    return DB_FILE
+            shutil.copy2(bundled_db, db_file)
+        except Exception as e:
+            print(f"Erreur lors de la copie de la BDD initiale : {e}")
 
-DB_FILE = get_db_path()
+    return db_file
 
 class DatabaseManager:
     def __init__(self):
-        self.db_file = DB_FILE
-        
-        # Création du dossier data si besoin (pour le développement local)
-        if not os.path.exists(os.path.dirname(DB_FILE)):
-            try:
-                os.makedirs(os.path.dirname(DB_FILE))
-            except PermissionError as e:
-                print(f"Impossible de créer le dossier data : {e}")
-
-        self.conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-        self.cursor = self.conn.cursor()  # ✅ Le curseur est ici
-        
-        # Création des tables si elles n'existent pas
+        self.db_path = get_db_path()
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.cursor = self.conn.cursor()
         self._create_tables()
 
     def _create_tables(self):
-        """Crée les tables si elles n'existent pas"""
+        """Crée les tables et met à jour le schéma si nécessaire"""
         try:
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS items (
@@ -52,9 +50,17 @@ class DatabaseManager:
                     categorie TEXT,
                     prix REAL,
                     magasin TEXT,
-                    date_achat TEXT DEFAULT CURRENT_TIMESTAMP
+                    date_achat TEXT DEFAULT CURRENT_TIMESTAMP,
+                    quantite REAL DEFAULT 1.0
                 )
             ''')
+            
+            # Si la table existait AVANT que tu ajoutes "quantite", ça va planter.
+            # On tente d'ajouter la colonne. Si elle existe déjà, ça lève une erreur qu'on ignore.
+            try:
+                self.cursor.execute("ALTER TABLE items ADD COLUMN quantite REAL DEFAULT 1.0")
+            except sqlite3.OperationalError:
+                pass # La colonne existe déjà, tout va bien.
             
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS price_history (
@@ -68,29 +74,50 @@ class DatabaseManager:
         except Exception as e:
             print(f"Erreur création tables : {e}")
 
-    def add_item(self, article, categorie, prix, magasin):
-        """Ajoute un article et son historique"""
+    def add_item(self, article, categorie, prix, magasin, quantite=1.0):
         try:
-            # Insertion dans la table principale
             self.cursor.execute('''
-                INSERT INTO items (article, categorie, prix, magasin) 
-                VALUES (?, ?, ?, ?)
-            ''', (article, categorie, prix, magasin))
+                INSERT INTO items (article, categorie, prix, magasin, quantite) 
+                VALUES (?, ?, ?, ?, ?)
+            ''', (article, categorie, prix, magasin, quantite))
 
-            # Insertion dans l'historique pour les fluctuations
             self.cursor.execute('''
                 INSERT INTO price_history (article, prix) VALUES (?, ?)
             ''', (article, prix))
 
-            self.conn.commit()  # ⚠️ IMPORTANT : Sauvegarde immédiate
+            self.conn.commit()
             return True
         except Exception as e:
-            print(f"Erreur ajout item : {e}")
+            print(f"Erreur ajout : {e}")
+            self.conn.rollback()
+            return False
+        
+    def rename_article_global(self, old_name, new_name):
+        try:
+            self.cursor.execute("UPDATE items SET article = ? WHERE article = ?", (new_name, old_name))
+            self.cursor.execute("UPDATE price_history SET article = ? WHERE article = ?", (new_name, old_name))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Erreur renomination : {e}")
             self.conn.rollback()
             return False
 
+    def get_summary_by_category(self):
+        self.cursor.execute('''
+            SELECT categorie, SUM(prix), SUM(quantite) 
+            FROM items GROUP BY categorie
+        ''')
+        return self.cursor.fetchall()
+    
+    def get_summary_by_article(self):
+        self.cursor.execute('''
+            SELECT article, SUM(quantite) 
+            FROM items GROUP BY article
+        ''')
+        return self.cursor.fetchall()
+
     def get_total_budget(self):
-        """Récupère le total dépensé"""
         try:
             self.cursor.execute("SELECT SUM(prix) FROM items")
             result = self.cursor.fetchone()[0]
@@ -100,7 +127,6 @@ class DatabaseManager:
             return 0.0
 
     def get_all_items(self):
-        """Récupère TOUS les articles pour l'affichage"""
         try:
             self.cursor.execute("SELECT * FROM items ORDER BY id DESC")
             return self.cursor.fetchall()
@@ -108,43 +134,34 @@ class DatabaseManager:
             print(f"Erreur lecture items : {e}")
             return []
 
-    def close(self):
-        """Ferme proprement la connexion"""
-        if self.conn:
-            self.conn.close()
+    def get_price_history(self, article_name):
+        try:
+            self.cursor.execute('''
+                SELECT prix, date_achat FROM price_history 
+                WHERE article = ? ORDER BY date_achat ASC
+            ''', (article_name,))
+            return self.cursor.fetchall()
+        except Exception as e:
+            print(f"Erreur historique : {e}")
+            return []
 
-
-def delete_item(self, item_id):
-    """Supprime un article par son ID"""
-    try:
-        # Supprimer depuis la table items
-        self.cursor.execute("DELETE FROM items WHERE id = ?", (item_id,))
-        
-        # Récupérer l'article pour aussi le supprimer de price_history
-        self.cursor.execute("SELECT article FROM items WHERE id = ?", (item_id,))
-        result = self.cursor.fetchone()
-        
-        if result:
-            article_name = result[0]
-            # Supprimer depuis price_history
-            self.cursor.execute("DELETE FROM price_history WHERE article = ?", (article_name,))
+    def delete_item(self, item_id):
+        try:
+            self.cursor.execute("SELECT article FROM items WHERE id = ?", (item_id,))
+            result = self.cursor.fetchone()
             
-            self.conn.commit()
-            return True
-        else:
+            if result:
+                article_name = result[0]
+                self.cursor.execute("DELETE FROM items WHERE id = ?", (item_id,))
+                self.cursor.execute("DELETE FROM price_history WHERE article = ?", (article_name,))
+                self.conn.commit()
+                return True
+            return False
+        except Exception as e:
+            print(f"Erreur suppression : {e}")
             self.conn.rollback()
             return False
-            
-    except Exception as e:
-        print(f"Erreur suppression : {e}")
-        self.conn.rollback()
-        return False
 
-def get_item_by_id(self, item_id):
-    """Récupère un article par son ID"""
-    try:
-        self.cursor.execute("SELECT * FROM items WHERE id = ?", (item_id,))
-        return self.cursor.fetchone()
-    except Exception as e:
-        print(f"Erreur lecture : {e}")
-        return None
+    def close(self):
+        if self.conn:
+            self.conn.close()
