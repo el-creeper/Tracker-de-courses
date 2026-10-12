@@ -46,7 +46,6 @@ class DatabaseManager:
                 )
             ''')
             
-            # Vérification propre de l'existence de la colonne quantite
             self.cursor.execute("PRAGMA table_info(items)")
             columns = [col[1] for col in self.cursor.fetchall()]
             if 'quantite' not in columns:
@@ -182,6 +181,43 @@ class DatabaseManager:
         except Exception:
             self.conn.rollback()
             return False
+
+    # --- NOUVELLES MÉTHODES POUR AUTOCOMPLÉTION ET COMPARATEUR ---
+
+    def get_unique_articles(self):
+        """Récupère la liste de tous les articles uniques pour l'autocomplétion"""
+        try:
+            self.cursor.execute("SELECT DISTINCT article FROM items WHERE article IS NOT NULL AND article != '' ORDER BY article")
+            return [row[0] for row in self.cursor.fetchall()]
+        except Exception:
+            return []
+
+    def get_article_defaults(self, article_name):
+        """Récupère la catégorie, le dernier prix et le dernier magasin utilisés pour un article"""
+        try:
+            self.cursor.execute('''
+                SELECT categorie, prix, magasin 
+                FROM items 
+                WHERE article = ? 
+                ORDER BY date_achat DESC LIMIT 1
+            ''', (article_name,))
+            return self.cursor.fetchone()
+        except Exception:
+            return None
+
+    def get_store_comparison(self, article_name):
+        """Récupère le prix moyen d'un article en fonction du magasin"""
+        try:
+            self.cursor.execute('''
+                SELECT magasin, AVG(prix) 
+                FROM items 
+                WHERE article = ? AND magasin IS NOT NULL AND magasin != ''
+                GROUP BY magasin
+                ORDER BY AVG(prix) ASC
+            ''', (article_name,))
+            return self.cursor.fetchall()
+        except Exception:
+            return []
 
     def close(self):
         if self.conn:
